@@ -129,7 +129,7 @@ pub struct CreatedCampaign {
     end_date_timestamp: i64,
 }
 
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, PartialEq, Deserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, PartialEq)]
 
 pub struct BuyToken {
     #[allow(dead_code)] // not dead code..
@@ -160,6 +160,7 @@ impl AccountInstruction {
                 }
             }
             1 => {
+
                 let deserialized_data: BuyToken =
                     BorshDeserialize::try_from_slice(&mut &rest[..]).unwrap();
                 Self::BuyToken {
@@ -190,11 +191,11 @@ pub fn process_instruction(
 
     if campaign_account.owner != program_id {
         msg!("Account is not owned by this program");
-        return Err(ProgramError::IllegalOwner);
+        return Err(ProgramError::InvalidInstructionData);
     }
     if !signer_account.is_signer {
         msg!("You are not a signer");
-        return Err(ProgramError::IllegalOwner);
+        return Err(ProgramError::InvalidInstructionData);
     };
 
     let mut deserialized_data: AccountInstruction =
@@ -228,12 +229,15 @@ pub fn process_instruction(
             let total_amount = amount_to_add_to_exchange + amount_to_be_sold;
 
             if temp_token_account_info.amount as u128 != total_amount {
-            
-                return Err(ProgramError::BorshIoError(String::from("Required amount doesn't match Account amount")));
+                                                              
+                msg!("Required amount doesn't match Account amount");
+                return Err(ProgramError::InvalidInstructionData);
 
             }
             if temp_token_account_info.mint != *mint_token_address.key {
-                return Err(ProgramError::BorshIoError(String::from("Temp account mint doesn't match the token mint")));
+                                                                                
+                msg!("Temp account mint doesn't match the token mint");
+                return Err(ProgramError::InvalidInstructionData);
             }
 
             let owner_change_ix = spl_token::instruction::set_authority(
@@ -270,7 +274,9 @@ pub fn process_instruction(
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
             if campaign_data.initialized {
-                return Err(ProgramError::BorshIoError(String::from("Campaign already initialized")));
+                                                                
+                msg!("Campaign already initialized");
+                return Err(ProgramError::InvalidInstructionData);
             };
 
             let to_serialize: CampaignAccount = CampaignAccount {
@@ -296,17 +302,26 @@ pub fn process_instruction(
      
             let clock = Clock::get()?;
 
-            let seed = "BuyerAccountSeed".to_owned();
+            let campaign_key = (*campaign_account.key).as_ref().to_owned();
+
+            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
+
             let s = &seed[..].as_ref();
 
             let expected_buyer_account_key =
-                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key,s, program_id).unwrap();
             if expected_buyer_account_key != *buyer_account.key {
-                return Err(ProgramError::BorshIoError(String::from("Buyer account doesn't meet the required pattern")));
+                                
+                msg!("Buyer account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
             };
             if buyer_account.owner != program_id {
-                return Err(ProgramError::BorshIoError(String::from("Buyer account is not owned by the program")));
+                                                
+                msg!("Buyer account is not owned by the program");
+                return Err(ProgramError::InvalidInstructionData);
             };
+
+
 
             let mut buyer_account_data = buyer_account.try_borrow_mut_data()?;
 
@@ -346,7 +361,9 @@ pub fn process_instruction(
             **temp_buy_account.try_borrow_mut_lamports()? -= lamports_quantity as u64;
             **campaign_account.try_borrow_mut_lamports()? += lamports_quantity as u64;
 
+
             buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
+
             campaign_account_data_res.serialize(&mut &mut account_data[..])?;
         }
         AccountInstruction::ClaimToken {} => {
@@ -362,6 +379,7 @@ pub fn process_instruction(
             let associated_token_account_info =
                 TokenAccount::unpack_from_slice(&associated_token_account.data.borrow())?;
 
+
             let campaign_account_data_res: CampaignAccount =
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
@@ -369,7 +387,11 @@ pub fn process_instruction(
             let mut buyer_account_data_des: BuyerAccount =
                 BorshDeserialize::deserialize(&mut &buyer_account_data[..]).unwrap();
 
-            let seed = "BuyerAccountSeed".to_owned();
+
+            let campaign_key = (*campaign_account.key).as_ref().to_owned();
+
+            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
+
             let s = &seed[..].as_ref();
 
             let expected_buyer_account_key =
@@ -377,24 +399,34 @@ pub fn process_instruction(
 
             if associated_token_account_info.owner != *buyer_account.key {
                 
-                    return Err(ProgramError::BorshIoError(String::from("Can't match given token account")));
+                msg!("Can't match given token account");
+                return Err(ProgramError::InvalidInstructionData);
             };    
             if expected_buyer_account_key != *buyer_account.key {
-                
-                return Err(ProgramError::BorshIoError(String::from("Buyer account doesn't meet the required pattern")));
+
+                msg!("Buyer account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
             };
             if *campaign_account.key != buyer_account_data_des.campaign_account {
 
-                return Err(ProgramError::BorshIoError(String::from("Unable to match campaign account for the entered buyer account")));
+                msg!("Unable to match campaign account for the entered buyer account");
+                return Err(ProgramError::InvalidInstructionData);
+
             };
             if buyer_account.owner != program_id {
 
-                return Err(ProgramError::BorshIoError(String::from("Buyer account is not owned by the program")));
+                msg!("Buyer account is not owned by the program");
+                return Err(ProgramError::InvalidInstructionData);
+
             };
             if buyer_account_data_des.claimed == true {
 
-                return Err(ProgramError::BorshIoError(String::from("You can't claim twice")));
+                msg!("You can't claim twice");
+                return Err(ProgramError::InvalidInstructionData);
+
             }
+
+
             if is_live(
                 campaign_account_data_res.clone(),
                 clock.epoch_start_timestamp,
@@ -402,8 +434,9 @@ pub fn process_instruction(
                 campaign_account_data_res.clone(),
                 clock.epoch_start_timestamp,
             ) {
-                
-                return Err(ProgramError::BorshIoError(String::from("Can't withdraw tokens")));
+
+                msg!("Can't withdraw tokens");
+                return Err(ProgramError::InvalidInstructionData);
             }
 
             let claimable_amount = (buyer_account_data_des.contributed_lamports
@@ -413,8 +446,9 @@ pub fn process_instruction(
             let (pda, _bump_seed) = Pubkey::find_program_address(&[b"contract"], program_id);
 
             if pda != *pda_account.key {
-
-                return Err(ProgramError::BorshIoError(String::from("Wrong PDA")));
+                
+                msg!("Wrong PDA");
+                return Err(ProgramError::InvalidInstructionData);
             };
 
             let transfer_to_taker_ix = spl_token::instruction::transfer(
