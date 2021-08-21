@@ -27,7 +27,11 @@ pub enum AccountInstruction {
         hard_cap: u128,
         #[allow(dead_code)] // not dead code..
         soft_cap: u128,
-
+        #[allow(dead_code)] // not dead code..
+        max_per_wallet: u128,
+    
+        #[allow(dead_code)] // not dead code..
+        min_per_wallet: u128,
         #[allow(dead_code)] // not dead code..
         presale_buy_rate: u128,
 
@@ -48,6 +52,7 @@ pub enum AccountInstruction {
         lamports_quantity: u128,
     },
     ClaimToken {},
+    WithdrawFunds {},
     InvalidInst {},
 }
 
@@ -61,6 +66,12 @@ pub struct CampaignAccount {
     hard_cap: u128,
     #[allow(dead_code)] // not dead code..
     soft_cap: u128,
+
+    #[allow(dead_code)] // not dead code..
+    max_per_wallet: u128,
+
+    #[allow(dead_code)] // not dead code..
+    min_per_wallet: u128,
 
     #[allow(dead_code)] // not dead code..
     presale_buy_rate: u128,
@@ -114,6 +125,12 @@ pub struct CreatedCampaign {
     soft_cap: u128,
 
     #[allow(dead_code)] // not dead code..
+    max_per_wallet: u128,
+
+    #[allow(dead_code)] // not dead code..
+    min_per_wallet: u128,
+
+    #[allow(dead_code)] // not dead code..
     presale_buy_rate: u128,
 
     #[allow(dead_code)] // not dead code..
@@ -152,6 +169,8 @@ impl AccountInstruction {
                 Self::CreateCampaign {
                     hard_cap: deserialized_data.hard_cap,
                     soft_cap: deserialized_data.soft_cap,
+                    max_per_wallet : deserialized_data.max_per_wallet,
+                    min_per_wallet : deserialized_data.min_per_wallet,
                     presale_buy_rate: deserialized_data.presale_buy_rate,
                     exchange_percentage: deserialized_data.exchange_percentage,
                     presale_listing_exchange_rate: deserialized_data.presale_listing_exchange_rate,
@@ -160,7 +179,6 @@ impl AccountInstruction {
                 }
             }
             1 => {
-
                 let deserialized_data: BuyToken =
                     BorshDeserialize::try_from_slice(&mut &rest[..]).unwrap();
                 Self::BuyToken {
@@ -168,6 +186,7 @@ impl AccountInstruction {
                 }
             }
             2 => Self::ClaimToken {},
+            3 => Self::WithdrawFunds {},
             _ => Self::InvalidInst {},
         })
     }
@@ -178,9 +197,9 @@ entrypoint!(process_instruction);
 
 // Program entrypoint's implementation
 pub fn process_instruction(
-    program_id: &Pubkey, 
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
-    instruction_data: &[u8], 
+    instruction_data: &[u8],
 ) -> ProgramResult {
     let accounts_iter = &mut accounts.iter();
 
@@ -205,6 +224,8 @@ pub fn process_instruction(
         AccountInstruction::CreateCampaign {
             hard_cap,
             soft_cap,
+            max_per_wallet,
+            min_per_wallet,
             presale_buy_rate,
             exchange_percentage,
             presale_listing_exchange_rate,
@@ -222,20 +243,31 @@ pub fn process_instruction(
                 TokenAccount::unpack_from_slice(&temp_token_account.data.borrow())?;
 
             let amount_to_be_sold = (hard_cap * presale_buy_rate) / u128::pow(10, 9);
-            let amount_to_add_to_exchange = (((hard_cap * exchange_percentage) / 100)
+            let amount_to_add_to_exchange = (((hard_cap * exchange_percentage) / 1000)
                 * presale_listing_exchange_rate)
                 / u128::pow(10, 9);
 
             let total_amount = amount_to_add_to_exchange + amount_to_be_sold;
+            let token_key = (*mint_token_address.key).as_ref().to_owned();
+            let camp_seed = String::from_utf8_lossy(&token_key[0..9]);
 
-            if temp_token_account_info.amount as u128 != total_amount {
-                                                              
-                msg!("Required amount doesn't match Account amount");
+            let camp_s = &camp_seed[..].as_ref();
+
+            let expected_campaign_account_key =
+                Pubkey::create_with_seed(signer_account.key, camp_s, program_id).unwrap();
+
+
+            if expected_campaign_account_key != *campaign_account.key {
+
+                msg!("Campaign account is doesn't match the expected");
                 return Err(ProgramError::InvalidInstructionData);
 
             }
+            if temp_token_account_info.amount as u128 != total_amount {
+                msg!("Required amount doesn't match Account amount");
+                return Err(ProgramError::InvalidInstructionData);
+            }
             if temp_token_account_info.mint != *mint_token_address.key {
-                                                                                
                 msg!("Temp account mint doesn't match the token mint");
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -258,23 +290,10 @@ pub fn process_instruction(
                 ],
             )?;
 
-            //  spl_token::instruction::
-
-            // Begin Create account
-
-            // let  seed = "heyll".to_owned();
-            // let  s = &seed[..].as_ref();
-            // let program_key = Pubkey::create_with_seed(signer_account.key,s,program_id).unwrap();
-
-            // End create account
-            // clock;
-            // sysvar::epoch_schedule::id().log();
-
             let mut campaign_data: CampaignAccount =
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
             if campaign_data.initialized {
-                                                                
                 msg!("Campaign already initialized");
                 return Err(ProgramError::InvalidInstructionData);
             };
@@ -283,6 +302,8 @@ pub fn process_instruction(
                 token_address: *mint_token_address.key,
                 hard_cap: hard_cap,
                 soft_cap,
+                max_per_wallet,
+                min_per_wallet,
                 presale_buy_rate,
                 exchange_percentage,
                 presale_listing_exchange_rate,
@@ -299,7 +320,6 @@ pub fn process_instruction(
             let buyer_account = next_account_info(accounts_iter)?;
             let temp_buy_account = next_account_info(accounts_iter)?;
 
-     
             let clock = Clock::get()?;
 
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
@@ -309,19 +329,18 @@ pub fn process_instruction(
             let s = &seed[..].as_ref();
 
             let expected_buyer_account_key =
-                Pubkey::create_with_seed(signer_account.key,s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
             if expected_buyer_account_key != *buyer_account.key {
-                                
+
+                msg!("seed {}",seed);
                 msg!("Buyer account doesn't meet the required pattern");
                 return Err(ProgramError::InvalidInstructionData);
             };
             if buyer_account.owner != program_id {
-                                                
                 msg!("Buyer account is not owned by the program");
                 return Err(ProgramError::InvalidInstructionData);
             };
-
-
+           
 
             let mut buyer_account_data = buyer_account.try_borrow_mut_data()?;
 
@@ -331,16 +350,21 @@ pub fn process_instruction(
             let mut campaign_account_data_res: CampaignAccount =
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
-            // if !isLive(
-            //     campaign_account_data_res.clone(),
-            //     clock.epoch_start_timestamp,
-            // ) || isFailed(
-            //     campaign_account_data_res.clone(),
-            //     clock.epoch_start_timestamp,
-            // ) {
-            //     msg!("Campaign is not live");
-            //     return Err(ProgramError::IncorrectProgramId);
-            // }
+        
+           
+
+            if !is_live(
+                campaign_account_data_res.clone(),
+                clock.unix_timestamp,
+            ) || is_failed(
+                campaign_account_data_res.clone(),
+                clock.unix_timestamp,
+            ) {
+
+                msg!("Current timestamp {}",clock.unix_timestamp);
+                msg!("Campaign is not live");
+                return Err(ProgramError::InvalidInstructionData);
+            }
 
             if buyer_account_data_des.initialized != true {
                 buyer_account_data_des = BuyerAccount {
@@ -351,8 +375,28 @@ pub fn process_instruction(
                     claimed: false,
                 }
             }
+            if buyer_account_data_des.initializer != *signer_account.key {
+                msg!("Buyer account is not owned by the signer");
+                return Err(ProgramError::InvalidInstructionData);
+            };
 
-    
+
+            if campaign_account_data_res.max_per_wallet < buyer_account_data_des.contributed_lamports + lamports_quantity {
+                msg!("Can't buy more than you are allowed to");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            if (campaign_account_data_res.min_per_wallet > lamports_quantity) && ( campaign_account_data_res.min_per_wallet < campaign_account_data_res.hard_cap - campaign_account_data_res.total_lamports_collected) {
+                msg!("Can't buy less than you are required to");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+
+            if *campaign_account.key != buyer_account_data_des.campaign_account{
+
+                msg!("Buyer account is not owned by campaign");
+                return Err(ProgramError::InvalidInstructionData);
+
+            }
 
             buyer_account_data_des.contributed_lamports += lamports_quantity;
 
@@ -360,7 +404,6 @@ pub fn process_instruction(
 
             **temp_buy_account.try_borrow_mut_lamports()? -= lamports_quantity as u64;
             **campaign_account.try_borrow_mut_lamports()? += lamports_quantity as u64;
-
 
             buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
 
@@ -379,14 +422,11 @@ pub fn process_instruction(
             let associated_token_account_info =
                 TokenAccount::unpack_from_slice(&associated_token_account.data.borrow())?;
 
-
             let campaign_account_data_res: CampaignAccount =
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
-
             let mut buyer_account_data_des: BuyerAccount =
                 BorshDeserialize::deserialize(&mut &buyer_account_data[..]).unwrap();
-
 
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
 
@@ -397,44 +437,34 @@ pub fn process_instruction(
             let expected_buyer_account_key =
                 Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
 
-            if associated_token_account_info.owner != *buyer_account.key {
-                
+            if associated_token_account_info.owner != *signer_account.key {
                 msg!("Can't match given token account");
                 return Err(ProgramError::InvalidInstructionData);
-            };    
+            };
             if expected_buyer_account_key != *buyer_account.key {
-
                 msg!("Buyer account doesn't meet the required pattern");
                 return Err(ProgramError::InvalidInstructionData);
             };
             if *campaign_account.key != buyer_account_data_des.campaign_account {
-
                 msg!("Unable to match campaign account for the entered buyer account");
                 return Err(ProgramError::InvalidInstructionData);
-
             };
             if buyer_account.owner != program_id {
-
                 msg!("Buyer account is not owned by the program");
                 return Err(ProgramError::InvalidInstructionData);
-
             };
             if buyer_account_data_des.claimed == true {
-
                 msg!("You can't claim twice");
                 return Err(ProgramError::InvalidInstructionData);
-
             }
-
 
             if is_live(
                 campaign_account_data_res.clone(),
-                clock.epoch_start_timestamp,
+                clock.unix_timestamp,
             ) || is_failed(
                 campaign_account_data_res.clone(),
-                clock.epoch_start_timestamp,
+                clock.unix_timestamp,
             ) {
-
                 msg!("Can't withdraw tokens");
                 return Err(ProgramError::InvalidInstructionData);
             }
@@ -446,7 +476,6 @@ pub fn process_instruction(
             let (pda, _bump_seed) = Pubkey::find_program_address(&[b"contract"], program_id);
 
             if pda != *pda_account.key {
-                
                 msg!("Wrong PDA");
                 return Err(ProgramError::InvalidInstructionData);
             };
@@ -474,20 +503,86 @@ pub fn process_instruction(
             buyer_account_data_des.claimed = true;
 
             buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
-        },
-        AccountInstruction::InvalidInst {} => return Err(ProgramError::BorshIoError(String::from("Invalid instruction"))),
+        }
+        AccountInstruction::WithdrawFunds {} => {
 
+            let buyer_account = next_account_info(accounts_iter)?;
+            let mint_token_address = next_account_info(accounts_iter)?;
+
+
+            let mut buyer_account_data = buyer_account.try_borrow_mut_data()?;
+            let mut buyer_account_data_des: BuyerAccount =
+            BorshDeserialize::deserialize(&mut &buyer_account_data[..]).unwrap();
+
+            let campaign_account_data_res: CampaignAccount =
+                BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
+            
+
+            let clock = Clock::get()?;
+
+            let campaign_key = (*campaign_account.key).as_ref().to_owned();
+
+            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
+
+            let s = &seed[..].as_ref();
+
+
+            let expected_buyer_account_key =
+                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
+
+    
+            if expected_buyer_account_key != *buyer_account.key {
+                msg!("Buyer account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+            if *campaign_account.key != buyer_account_data_des.campaign_account {
+                msg!("Unable to match campaign account for the entered buyer account");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+            if buyer_account.owner != program_id {
+                msg!("Buyer account is not owned by the program");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+    
+            if !is_failed(
+                campaign_account_data_res.clone(),
+                clock.unix_timestamp,
+            ) {
+                msg!("Can't withdraw fund");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+            if buyer_account_data_des.claimed == true {
+                msg!("Already claimed");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+            **campaign_account.try_borrow_mut_lamports()? -= buyer_account_data_des.contributed_lamports as u64;
+            **signer_account.try_borrow_mut_lamports()? += buyer_account_data_des.contributed_lamports as u64;
+
+            buyer_account_data_des.claimed = true;
+            buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
+
+
+            
+        }
+        AccountInstruction::InvalidInst {} => {
+            return Err(ProgramError::BorshIoError(String::from(
+                "Invalid instruction",
+            )))
+        }
     }
     fn is_live(campaign: CampaignAccount, current_time: i64) -> bool {
         if campaign.total_lamports_collected >= campaign.hard_cap {
             return false;
-        }
-        if (current_time > campaign.end_date_timestamp)
+        }else if (current_time > campaign.end_date_timestamp)
             || (current_time < campaign.start_date_timestamp)
         {
             return false;
+        }else {
+
+            return true;
         }
-        return true;
     }
 
     fn is_failed(campaign: CampaignAccount, current_time: i64) -> bool {
@@ -495,8 +590,10 @@ pub fn process_instruction(
             && (current_time > campaign.end_date_timestamp)
         {
             return true;
+        }else{
+            return false;
+
         }
-        return false;
     }
 
     Ok(())
