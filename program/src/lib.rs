@@ -53,6 +53,7 @@ pub enum AccountInstruction {
     },
     ClaimToken {},
     WithdrawFunds {},
+    DistributeFunds {},
     InvalidInst {},
 }
 
@@ -96,6 +97,14 @@ pub struct CampaignAccount {
 
     #[allow(dead_code)] // not dead code..
     initialized: bool,
+
+    // #[allow(dead_code)] // not dead code..
+    // succeeded: bool,
+
+    #[allow(dead_code)] // not dead code..
+    owner: Pubkey,
+    
+    
 }
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 
@@ -187,6 +196,7 @@ impl AccountInstruction {
             }
             2 => Self::ClaimToken {},
             3 => Self::WithdrawFunds {},
+            4 => Self::DistributeFunds {},
             _ => Self::InvalidInst {},
         })
     }
@@ -249,12 +259,10 @@ pub fn process_instruction(
 
             let total_amount = amount_to_add_to_exchange + amount_to_be_sold;
             let token_key = (*mint_token_address.key).as_ref().to_owned();
-            let camp_seed = String::from_utf8_lossy(&token_key[0..9]);
-
-            let camp_s = &camp_seed[..].as_ref();
+            let camp_seed = (&token_key[0..9]).iter().map(|&c| c as char).collect::<String>();
 
             let expected_campaign_account_key =
-                Pubkey::create_with_seed(signer_account.key, camp_s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key, &camp_seed, program_id).unwrap();
 
 
             if expected_campaign_account_key != *campaign_account.key {
@@ -312,6 +320,7 @@ pub fn process_instruction(
                 total_lamports_collected: 0,
                 temp_token_account: *temp_token_account.key,
                 initialized: true,
+                owner : *signer_account.key
             };
 
             to_serialize.serialize(&mut &mut account_data[..])?;
@@ -324,15 +333,14 @@ pub fn process_instruction(
 
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
 
-            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
+            let seed = (&campaign_key[0..9]).iter().map(|&c| c as char).collect::<String>();
 
-            let s = &seed[..].as_ref();
 
             let expected_buyer_account_key =
-                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key, &seed, program_id).unwrap();
             if expected_buyer_account_key != *buyer_account.key {
 
-                msg!("seed {}",seed);
+                msg!("seed {}",expected_buyer_account_key);
                 msg!("Buyer account doesn't meet the required pattern");
                 return Err(ProgramError::InvalidInstructionData);
             };
@@ -380,6 +388,11 @@ pub fn process_instruction(
                 return Err(ProgramError::InvalidInstructionData);
             };
 
+            if campaign_account_data_res.hard_cap < campaign_account_data_res.total_lamports_collected + lamports_quantity {
+
+                msg!("Can't contribute more than hardcap");
+                return Err(ProgramError::InvalidInstructionData);
+            }
 
             if campaign_account_data_res.max_per_wallet < buyer_account_data_des.contributed_lamports + lamports_quantity {
                 msg!("Can't buy more than you are allowed to");
@@ -430,12 +443,10 @@ pub fn process_instruction(
 
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
 
-            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
-
-            let s = &seed[..].as_ref();
+            let seed = (&campaign_key[0..9]).iter().map(|&c| c as char).collect::<String>();
 
             let expected_buyer_account_key =
-                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key, &seed, program_id).unwrap();
 
             if associated_token_account_info.owner != *signer_account.key {
                 msg!("Can't match given token account");
@@ -507,8 +518,6 @@ pub fn process_instruction(
         AccountInstruction::WithdrawFunds {} => {
 
             let buyer_account = next_account_info(accounts_iter)?;
-            let mint_token_address = next_account_info(accounts_iter)?;
-
 
             let mut buyer_account_data = buyer_account.try_borrow_mut_data()?;
             let mut buyer_account_data_des: BuyerAccount =
@@ -522,13 +531,10 @@ pub fn process_instruction(
 
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
 
-            let seed = String::from_utf8_lossy(&campaign_key[0..9]);
-
-            let s = &seed[..].as_ref();
-
+            let seed = (&campaign_key[0..9]).iter().map(|&c| c as char).collect::<String>();
 
             let expected_buyer_account_key =
-                Pubkey::create_with_seed(signer_account.key, s, program_id).unwrap();
+                Pubkey::create_with_seed(signer_account.key, &seed, program_id).unwrap();
 
     
             if expected_buyer_account_key != *buyer_account.key {
@@ -565,6 +571,45 @@ pub fn process_instruction(
 
 
             
+        }
+        AccountInstruction::DistributeFunds {} =>{
+            let campaign_owner = next_account_info(accounts_iter)?;
+
+            let mut campaign_account_data_res: CampaignAccount =
+            BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
+
+
+            let clock = Clock::get()?;
+
+
+            if campaign_account_data_res.owner != *campaign_owner.key {
+                msg!("Invalid campaign owner");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            if is_live(
+                campaign_account_data_res.clone(),
+                clock.unix_timestamp,
+            ) || is_failed(
+                campaign_account_data_res.clone(),
+                clock.unix_timestamp,
+            ) {
+
+                msg!("Current timestamp {}",clock.unix_timestamp);
+                msg!("Campaign is not live");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            
+
+            **campaign_account.try_borrow_mut_lamports()? -= campaign_account_data_res.total_lamports_collected as u64;
+            **campaign_owner.try_borrow_mut_lamports()? += campaign_account_data_res.total_lamports_collected as u64;
+
+
+
+
+
+
+
+
         }
         AccountInstruction::InvalidInst {} => {
             return Err(ProgramError::BorshIoError(String::from(
