@@ -36,12 +36,6 @@ pub enum AccountInstruction {
         presale_buy_rate: u128,
 
         #[allow(dead_code)] // not dead code..
-        exchange_percentage: u128,
-
-        #[allow(dead_code)] // not dead code..
-        presale_listing_exchange_rate: u128,
-
-        #[allow(dead_code)] // not dead code..
         start_date_timestamp: i64,
 
         #[allow(dead_code)] // not dead code..
@@ -54,6 +48,7 @@ pub enum AccountInstruction {
     ClaimToken {},
     WithdrawFunds {},
     DistributeFunds {},
+    CreateConfigAccount {fee : u128},
     InvalidInst {},
 }
 
@@ -78,12 +73,6 @@ pub struct CampaignAccount {
     presale_buy_rate: u128,
 
     #[allow(dead_code)] // not dead code..
-    exchange_percentage: u128,
-
-    #[allow(dead_code)] // not dead code..
-    presale_listing_exchange_rate: u128,
-
-    #[allow(dead_code)] // not dead code..
     start_date_timestamp: i64,
 
     #[allow(dead_code)] // not dead code..
@@ -98,11 +87,38 @@ pub struct CampaignAccount {
     #[allow(dead_code)] // not dead code..
     initialized: bool,
 
-    // #[allow(dead_code)] // not dead code..
-    // succeeded: bool,
+    #[allow(dead_code)] // not dead code..
+    succeeded: bool,
 
     #[allow(dead_code)] // not dead code..
     owner: Pubkey,
+    
+    
+}
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+
+pub struct ConfigAccount {
+
+    #[allow(dead_code)] // not dead code..
+    to_address: Pubkey,
+    #[allow(dead_code)] // not dead code..
+    fee: u128,
+    #[allow(dead_code)] // not dead code..
+    owner: Pubkey,
+    #[allow(dead_code)] // not dead code..
+    initialized: bool,
+
+    
+    
+}
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+
+pub struct CreateAccount {
+
+    #[allow(dead_code)] // not dead code..
+    fee: u128,
+
+
     
     
 }
@@ -143,12 +159,6 @@ pub struct CreatedCampaign {
     presale_buy_rate: u128,
 
     #[allow(dead_code)] // not dead code..
-    exchange_percentage: u128,
-
-    #[allow(dead_code)] // not dead code..
-    presale_listing_exchange_rate: u128,
-
-    #[allow(dead_code)] // not dead code..
     start_date_timestamp: i64,
 
     #[allow(dead_code)] // not dead code..
@@ -181,8 +191,6 @@ impl AccountInstruction {
                     max_per_wallet : deserialized_data.max_per_wallet,
                     min_per_wallet : deserialized_data.min_per_wallet,
                     presale_buy_rate: deserialized_data.presale_buy_rate,
-                    exchange_percentage: deserialized_data.exchange_percentage,
-                    presale_listing_exchange_rate: deserialized_data.presale_listing_exchange_rate,
                     start_date_timestamp: deserialized_data.start_date_timestamp,
                     end_date_timestamp: deserialized_data.end_date_timestamp,
                 }
@@ -197,6 +205,14 @@ impl AccountInstruction {
             2 => Self::ClaimToken {},
             3 => Self::WithdrawFunds {},
             4 => Self::DistributeFunds {},
+            5 => {
+                let deserialized_data: CreateAccount =
+                BorshDeserialize::try_from_slice(&mut &rest[..]).unwrap();
+            Self::CreateConfigAccount {
+                fee: deserialized_data.fee,
+            }
+
+            }
             _ => Self::InvalidInst {},
         })
     }
@@ -213,15 +229,9 @@ pub fn process_instruction(
 ) -> ProgramResult {
     let accounts_iter = &mut accounts.iter();
 
-    let campaign_account = next_account_info(accounts_iter)?;
     let signer_account = next_account_info(accounts_iter)?;
 
-    let mut account_data = campaign_account.try_borrow_mut_data()?;
-
-    if campaign_account.owner != program_id {
-        msg!("Account is not owned by this program");
-        return Err(ProgramError::InvalidInstructionData);
-    }
+   
     if !signer_account.is_signer {
         msg!("You are not a signer");
         return Err(ProgramError::InvalidInstructionData);
@@ -237,11 +247,18 @@ pub fn process_instruction(
             max_per_wallet,
             min_per_wallet,
             presale_buy_rate,
-            exchange_percentage,
-            presale_listing_exchange_rate,
             start_date_timestamp,
             end_date_timestamp,
         } => {
+
+            let campaign_account = next_account_info(accounts_iter)?;
+
+            let mut account_data = campaign_account.try_borrow_mut_data()?;
+        
+            if campaign_account.owner != program_id {
+                msg!("Account is not owned by this program");
+                return Err(ProgramError::InvalidInstructionData);
+            }
             msg!("Create Campaign");
 
             let mint_token_address = next_account_info(accounts_iter)?;
@@ -253,11 +270,9 @@ pub fn process_instruction(
                 TokenAccount::unpack_from_slice(&temp_token_account.data.borrow())?;
 
             let amount_to_be_sold = (hard_cap * presale_buy_rate) / u128::pow(10, 9);
-            let amount_to_add_to_exchange = (((hard_cap * exchange_percentage) / 1000)
-                * presale_listing_exchange_rate)
-                / u128::pow(10, 9);
 
-            let total_amount = amount_to_add_to_exchange + amount_to_be_sold;
+
+            let total_amount = amount_to_be_sold ;
             let token_key = (*mint_token_address.key).as_ref().to_owned();
             let camp_seed = (&token_key[0..9]).iter().map(|&c| c as char).collect::<String>();
 
@@ -313,19 +328,32 @@ pub fn process_instruction(
                 max_per_wallet,
                 min_per_wallet,
                 presale_buy_rate,
-                exchange_percentage,
-                presale_listing_exchange_rate,
                 start_date_timestamp,
                 end_date_timestamp,
                 total_lamports_collected: 0,
                 temp_token_account: *temp_token_account.key,
                 initialized: true,
+                succeeded : false,
                 owner : *signer_account.key
             };
 
             to_serialize.serialize(&mut &mut account_data[..])?;
         }
         AccountInstruction::BuyToken { lamports_quantity } => {
+
+
+            let campaign_account = next_account_info(accounts_iter)?;
+
+            let mut account_data = campaign_account.try_borrow_mut_data()?;
+        
+            if campaign_account.owner != program_id {
+                msg!("Account is not owned by this program");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+            msg!("Buy Token");
+
+
             let buyer_account = next_account_info(accounts_iter)?;
             let temp_buy_account = next_account_info(accounts_iter)?;
 
@@ -423,6 +451,18 @@ pub fn process_instruction(
             campaign_account_data_res.serialize(&mut &mut account_data[..])?;
         }
         AccountInstruction::ClaimToken {} => {
+            let campaign_account = next_account_info(accounts_iter)?;
+
+            let mut account_data = campaign_account.try_borrow_mut_data()?;
+        
+            if campaign_account.owner != program_id {
+                msg!("Account is not owned by this program");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            msg!("ClaimToken");
+
+
+            
             let associated_token_account = next_account_info(accounts_iter)?;
             let buyer_account = next_account_info(accounts_iter)?;
             let temp_token_account = next_account_info(accounts_iter)?;
@@ -511,17 +551,42 @@ pub fn process_instruction(
                 &[&[&b"contract"[..], &[_bump_seed]]],
             )?;
 
-            buyer_account_data_des.claimed = true;
+            // buyer_account_data_des.claimed = true;
 
-            buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
+            // buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
+            **signer_account.try_borrow_mut_lamports()? = signer_account.lamports().checked_add(buyer_account.lamports()).ok_or(ProgramError::InvalidInstructionData)?;
+            **buyer_account.try_borrow_mut_lamports()? = 0;
+            *buyer_account_data = &mut [];
+
         }
         AccountInstruction::WithdrawFunds {} => {
+            let campaign_account = next_account_info(accounts_iter)?;
+
+            let mut account_data = campaign_account.try_borrow_mut_data()?;
+        
+            if campaign_account.owner != program_id {
+                msg!("Account is not owned by this program");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+            msg!("WithdrawFunds");
+
 
             let buyer_account = next_account_info(accounts_iter)?;
+            let config_account = next_account_info(accounts_iter)?;
+            let to_fee_account = next_account_info(accounts_iter)?;
 
+            
+
+            let mut config_account_data = config_account.try_borrow_mut_data()?;
+
+            let  config_account_data_des: ConfigAccount =
+            BorshDeserialize::deserialize(&mut &config_account_data[..]).unwrap();
+            
             let mut buyer_account_data = buyer_account.try_borrow_mut_data()?;
             let mut buyer_account_data_des: BuyerAccount =
             BorshDeserialize::deserialize(&mut &buyer_account_data[..]).unwrap();
+            
 
             let campaign_account_data_res: CampaignAccount =
                 BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
@@ -532,6 +597,12 @@ pub fn process_instruction(
             let campaign_key = (*campaign_account.key).as_ref().to_owned();
 
             let seed = (&campaign_key[0..9]).iter().map(|&c| c as char).collect::<String>();
+            let config_seed ="config".to_owned();
+            let owner_key = [206, 183, 147, 105, 49, 82, 73, 110, 176, 156, 216, 99, 202, 54, 75, 239, 27, 254, 44, 83, 4, 7, 122, 34, 14, 36, 95, 119, 123, 229, 28, 188];
+
+            let expected_config_account = Pubkey::create_with_seed(&Pubkey::new_from_array(owner_key), &config_seed, program_id).unwrap();
+        
+
 
             let expected_buyer_account_key =
                 Pubkey::create_with_seed(signer_account.key, &seed, program_id).unwrap();
@@ -539,6 +610,14 @@ pub fn process_instruction(
     
             if expected_buyer_account_key != *buyer_account.key {
                 msg!("Buyer account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+            if config_account_data_des.to_address != *to_fee_account.key {
+                msg!("Config to_fee is not as expected");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+            if expected_config_account != *config_account.key {
+                msg!("Config account doesn't meet the required pattern");
                 return Err(ProgramError::InvalidInstructionData);
             };
             if *campaign_account.key != buyer_account_data_des.campaign_account {
@@ -563,29 +642,77 @@ pub fn process_instruction(
                 return Err(ProgramError::InvalidInstructionData);
             }
 
-            **campaign_account.try_borrow_mut_lamports()? -= buyer_account_data_des.contributed_lamports as u64;
-            **signer_account.try_borrow_mut_lamports()? += buyer_account_data_des.contributed_lamports as u64;
+            let to_withdraw_amount = (buyer_account_data_des.contributed_lamports * config_account_data_des.fee) / 1000;
 
-            buyer_account_data_des.claimed = true;
-            buyer_account_data_des.serialize(&mut &mut buyer_account_data[..])?;
+            let to_fees_amount = buyer_account_data_des.contributed_lamports - to_withdraw_amount;
+            
+
+            
+
+            **campaign_account.try_borrow_mut_lamports()? -= buyer_account_data_des.contributed_lamports as u64;
+            **signer_account.try_borrow_mut_lamports()? += to_withdraw_amount as u64;
+            **to_fee_account.try_borrow_mut_lamports()? += to_fees_amount as u64; 
+           
+            **signer_account.try_borrow_mut_lamports()? = signer_account.lamports().checked_add(buyer_account.lamports()).ok_or(ProgramError::InvalidInstructionData)?;
+            **buyer_account.try_borrow_mut_lamports()? = 0;
+            *buyer_account_data = &mut [];
 
 
             
         }
         AccountInstruction::DistributeFunds {} =>{
+            let campaign_account = next_account_info(accounts_iter)?;
+
+            let mut account_data = campaign_account.try_borrow_mut_data()?;
+        
+            if campaign_account.owner != program_id {
+                msg!("Account is not owned by this program");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+
+
+            msg!("Distribute Funds");
+
+
+
+
             let campaign_owner = next_account_info(accounts_iter)?;
+
+            let config_account = next_account_info(accounts_iter)?;
+            let to_fee_account = next_account_info(accounts_iter)?;
+            let owner_key = [206, 183, 147, 105, 49, 82, 73, 110, 176, 156, 216, 99, 202, 54, 75, 239, 27, 254, 44, 83, 4, 7, 122, 34, 14, 36, 95, 119, 123, 229, 28, 188];
+            
+
+            
+
+            let  config_account_data = config_account.try_borrow_mut_data()?;
+
+            let  config_account_data_des: ConfigAccount =
+            BorshDeserialize::deserialize(&mut &config_account_data[..]).unwrap();
 
             let mut campaign_account_data_res: CampaignAccount =
             BorshDeserialize::deserialize(&mut &account_data[..]).unwrap();
 
 
+
+
             let clock = Clock::get()?;
 
+            let config_seed ="config".to_owned();
 
+            let expected_config_account = Pubkey::create_with_seed(&Pubkey::new_from_array(owner_key), &config_seed, program_id).unwrap();
             if campaign_account_data_res.owner != *campaign_owner.key {
                 msg!("Invalid campaign owner");
                 return Err(ProgramError::InvalidInstructionData);
             }
+            if config_account_data_des.to_address != *to_fee_account.key {
+                msg!("Config to_fee is not as expected");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+            if expected_config_account != *config_account.key {
+                msg!("Config account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
+            };
             if is_live(
                 campaign_account_data_res.clone(),
                 clock.unix_timestamp,
@@ -598,10 +725,23 @@ pub fn process_instruction(
                 msg!("Campaign is not live");
                 return Err(ProgramError::InvalidInstructionData);
             }
-            
+
+            if campaign_account_data_res.succeeded == true {
+                msg!("Campaign already succeeded");
+                return Err(ProgramError::InvalidInstructionData);
+            }
+            let  to_distribute_amount= campaign_account_data_res.total_lamports_collected * config_account_data_des.fee / 1000 ;
+
+            let to_fees_amount = campaign_account_data_res.total_lamports_collected as u64  - to_distribute_amount as u64;
+
 
             **campaign_account.try_borrow_mut_lamports()? -= campaign_account_data_res.total_lamports_collected as u64;
-            **campaign_owner.try_borrow_mut_lamports()? += campaign_account_data_res.total_lamports_collected as u64;
+
+            **campaign_owner.try_borrow_mut_lamports()? += to_distribute_amount as u64;
+            **to_fee_account.try_borrow_mut_lamports()? += to_fees_amount as u64; 
+
+            campaign_account_data_res.succeeded = true;
+            campaign_account_data_res.serialize(&mut &mut account_data[..])?;
 
 
 
@@ -609,8 +749,41 @@ pub fn process_instruction(
 
 
 
+        },
+        AccountInstruction::CreateConfigAccount{fee}=>{
+            let config_account = next_account_info(accounts_iter)?;
+            let config_seed ="config".to_owned();
 
-        }
+            let mut config_account_data = config_account.try_borrow_mut_data()?;
+            let owner_key = [206, 183, 147, 105, 49, 82, 73, 110, 176, 156, 216, 99, 202, 54, 75, 239, 27, 254, 44, 83, 4, 7, 122, 34, 14, 36, 95, 119, 123, 229, 28, 188];
+
+            let expected_config_account = Pubkey::create_with_seed(&Pubkey::new_from_array(owner_key), &config_seed, program_id).unwrap();
+
+
+            if expected_config_account != *config_account.key {
+                msg!("Config account doesn't meet the required pattern");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+
+
+            let config_data_des: ConfigAccount =
+                BorshDeserialize::deserialize(&mut &config_account_data[..]).unwrap();
+
+            if config_data_des.initialized {
+                msg!("Config already initialized");
+                return Err(ProgramError::InvalidInstructionData);
+            };
+
+            let to_serialize: ConfigAccount = ConfigAccount {
+                to_address :*signer_account.key,
+                fee: fee,
+                owner : *signer_account.key,
+                initialized : true,
+            };
+
+            to_serialize.serialize(&mut &mut config_account_data[..])?;
+
+        },
         AccountInstruction::InvalidInst {} => {
             return Err(ProgramError::BorshIoError(String::from(
                 "Invalid instruction",
