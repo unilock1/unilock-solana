@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Mint, SetAuthority, TokenAccount, Transfer};
 use spl_token::instruction::AuthorityType;
-declare_id!("My11111111111111111111111111111111111111111");
+declare_id!("FCQH7SonwKkekepgjUd6w6uatQSVxkQMmMtgxgxaceCy");
 
 
 const CAMPAIGN_PDA_SEED: &[u8] = b"campaign";
+const CONFIG_PDA_SEED: &[u8] = b"config";
+
 
 #[program]
 pub mod unilock {
@@ -150,7 +152,8 @@ pub mod unilock {
         Ok(())
     }
     pub fn withdraw_funds(ctx: Context<WithdrawFunds>,campaign_bump: u8,
-        buyer_bump: u8) -> Result<()> {
+        buyer_bump: u8,    config_bump:u8
+    ) -> Result<()> {
         let clock = Clock::get()?;
 
         if !is_failed(
@@ -165,14 +168,19 @@ pub mod unilock {
 
 
         // ctx.accounts.campaign_account
+        let  to_distribute_amount= ctx.accounts.buyer_account.contributed_lamports * ctx.accounts.config_account.fee / 1000 ;
+        let to_fees_amount = ctx.accounts.buyer_account.contributed_lamports - to_distribute_amount ;
+
         **ctx.accounts.campaign_account.to_account_info().try_borrow_mut_lamports()? -=  ctx.accounts.buyer_account.contributed_lamports;
-        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += ctx.accounts.buyer_account.contributed_lamports;
+        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += to_distribute_amount;
+        **ctx.accounts.to_address.to_account_info().try_borrow_mut_lamports()? += to_fees_amount;
 
     
         
         Ok(())
     }
-    pub fn distribute_funds(ctx: Context<DistributeFunds>, campaign_bump: u8,
+    pub fn distribute_funds(ctx: Context<DistributeFunds>, campaign_bump: u8,config_bump:u8
+
         ) -> Result<()> {
         let clock = Clock::get()?;
 
@@ -196,13 +204,60 @@ pub mod unilock {
             
         }
         ctx.accounts.campaign_account.succeeded = true;
+
+        let  to_distribute_amount= ctx.accounts.campaign_account.total_lamports_collected * ctx.accounts.config_account.fee / 1000 ;
+        let to_fees_amount = ctx.accounts.campaign_account.total_lamports_collected  - to_distribute_amount ;
+
         **ctx.accounts.campaign_account.to_account_info().try_borrow_mut_lamports()? -=  ctx.accounts.campaign_account.total_lamports_collected;
-        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += ctx.accounts.campaign_account.total_lamports_collected;
+        **ctx.accounts.owner.to_account_info().try_borrow_mut_lamports()? += to_distribute_amount;
+        **ctx.accounts.to_address.to_account_info().try_borrow_mut_lamports()? += to_fees_amount;
+
+
 
 
         
         Ok(())
     }
+    pub fn init_config_account(ctx: Context<InitConfigAccount>, bump: u8,fee : u64
+    ) -> Result<()> {
+
+        if ctx.accounts.config_account.initialized {
+            return Err(error!(ErrorCode::CongfigInitialized));
+ 
+        }
+        ctx.accounts.config_account.initialized = true;
+        ctx.accounts.config_account.to_address = *ctx.accounts.to_address.key;
+        ctx.accounts.config_account.fee = fee;
+        ctx.accounts.config_account.owner =  *ctx.accounts.owner.key;
+    
+
+
+
+
+
+    
+    Ok(())
+  }
+  pub fn edit_config_account(ctx: Context<EditConfigAccount>, bump: u8,fee : u64
+  ) -> Result<()> {
+
+      if ctx.accounts.config_account.initialized {
+          return Err(error!(ErrorCode::CongfigInitialized));
+
+      }
+      ctx.accounts.config_account.initialized = true;
+      ctx.accounts.config_account.to_address = *ctx.accounts.to_address.key;
+      ctx.accounts.config_account.fee = fee;
+      ctx.accounts.config_account.owner =  *ctx.accounts.owner.key;
+  
+
+
+
+
+
+  
+  Ok(())
+}
 
    
 }
@@ -250,7 +305,6 @@ pub struct InitializeCampaign<'info> {
         seeds = [&mint.to_account_info().key.as_ref().to_owned()[0..9]],
         bump,
         payer = initializer,        
-        constraint = campaign_account.token_address == *mint.to_account_info().key,
         space = 44+ 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8+ 44 + 44
 
     )]
@@ -330,8 +384,7 @@ pub struct CampaignAccount {
         seeds = [&campaign_account.to_account_info().key.as_ref().to_owned()[0..4],&buyer.to_account_info().key.as_ref().to_owned()[0..5]],
         bump,
         space = 44 + 8 + 2 + 44 + 2 + 44,
-        constraint = buyer_account.owner == *buyer.to_account_info().key,
-        constraint = buyer_account.campaign_account == *campaign_account.to_account_info().key
+        
 
 
 
@@ -351,7 +404,8 @@ pub struct CampaignAccount {
 #[derive(Accounts)]
 #[instruction(
     campaign_bump: u8,
-    buyer_bump: u8
+    buyer_bump: u8,
+    config_bump:u8
 
 )]
 pub struct WithdrawFunds<'info>{
@@ -376,12 +430,31 @@ pub struct WithdrawFunds<'info>{
        has_one = owner,
        close = owner,
        seeds = [&campaign_account.to_account_info().key.as_ref().to_owned()[0..4],&owner.to_account_info().key.as_ref().to_owned()[0..5]],
-       bump = buyer_bump
+       bump = buyer_bump,
 
 
 
      )]
     pub buyer_account: Account<'info,BuyerAccount>,
+    #[account(
+        mut,
+
+ 
+ 
+      )]
+    pub to_address :AccountInfo<'info>,
+    #[account
+    (
+    
+        seeds = [CONFIG_PDA_SEED],
+        bump = config_bump,
+        has_one = to_address
+
+
+    
+    )]
+
+    pub config_account: Account<'info,ConfigAccount>,
 
 
 
@@ -391,6 +464,7 @@ pub struct WithdrawFunds<'info>{
 #[derive(Accounts)]
 #[instruction(
     campaign_bump: u8,
+    config_bump:u8
 )]
 pub struct DistributeFunds<'info>{
    
@@ -416,7 +490,19 @@ pub struct DistributeFunds<'info>{
 
     )]
     pub campaign_account: Account<'info,CampaignAccount>,
+    pub to_address :AccountInfo<'info>,
+    #[account
+    (
+    
+        seeds = [CONFIG_PDA_SEED],
+        bump = config_bump,
+        has_one = to_address
 
+
+    
+    )]
+
+    pub config_account: Account<'info,ConfigAccount>,
 
 
 
@@ -424,8 +510,83 @@ pub struct DistributeFunds<'info>{
 
 }
 
+#[derive(Accounts)]
+#[instruction(
+    bump: u8,
+)]
+pub struct InitConfigAccount<'info> {
+
+    to_address:  AccountInfo<'info>,
+
+    #[account(mut,signer)]
+
+    owner: AccountInfo<'info>,
+
+    #[account
+    (
+        init,
+        payer = owner,
+        space = 44 + 8 + 44 +2,
+        seeds = [CONFIG_PDA_SEED],
+        bump
 
 
+    
+    )]
+
+    config_account: Account<'info,ConfigAccount>,
+    pub rent: Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>,
+
+
+    
+}
+
+#[derive(Accounts)]
+#[instruction(
+    bump: u8,
+)]
+pub struct EditConfigAccount<'info> {
+
+    to_address:  AccountInfo<'info>,
+
+    #[account(mut,signer)]
+
+    owner: AccountInfo<'info>,
+
+    #[account
+    (
+
+        seeds = [CONFIG_PDA_SEED],
+        bump,
+        has_one = owner
+
+
+    
+    )]
+
+    config_account: Account<'info,ConfigAccount>,
+
+
+
+    
+}
+
+
+#[account]
+pub struct ConfigAccount {
+
+    to_address: Pubkey,
+
+    fee: u64,
+
+    owner: Pubkey,
+
+    initialized: bool,
+
+    
+    
+}
 
 
 
@@ -556,7 +717,9 @@ pub enum ErrorCode {
     #[msg("Invalid Authority")]
     InvalidAuthority,
     #[msg("Campaign already succeeded")]
-    AlreadySucceeded
+    AlreadySucceeded,
+    #[msg("Config Already initialized")]
+    CongfigInitialized
 
 
 
