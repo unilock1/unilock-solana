@@ -26,8 +26,9 @@ pub mod unilock {
         listing_price : u64,
         start_date_timestamp: i64,
         end_date_timestamp: i64,
+        unlock_date: u64
     ) -> Result<()> {
-        
+  
         let campaign_account = &mut ctx.accounts.campaign_account;
         campaign_account.token_address = *ctx.accounts.mint.to_account_info().key;
         campaign_account.pc_token_address = *ctx.accounts.pc_mint.to_account_info().key;
@@ -46,11 +47,15 @@ pub mod unilock {
         campaign_account.raydium_percentage = raydium_percentage;
         campaign_account.listing_price = listing_price;
         campaign_account.succeeded = false;
+        campaign_account.unlock_date = unlock_date;
+       
+
 
         let coin_decimals =  ctx.accounts.mint.decimals;
+   
 
-        let token_to_ray =( (((hard_cap * raydium_percentage as u64 ) / 1000) * listing_price as u64 ) / u64::pow(10, 9) ) * u64::pow(10, coin_decimals as u32) ;
-        let to_transfer_tokens =(presale_buy_rate*hard_cap) / u64::pow(10, 9) + token_to_ray;
+        let token_to_ray = (((hard_cap * raydium_percentage  ) / 1000) / u64::pow(10, 9) )  * listing_price  ;
+        let to_transfer_tokens =(presale_buy_rate*(hard_cap / u64::pow(10, 9))) + token_to_ray;
 
         if ( ctx.accounts.initializer_deposit_token_account.amount <  to_transfer_tokens ){
 
@@ -415,6 +420,7 @@ pub mod unilock {
         ).unwrap();
          
         ctx.accounts.campaign_account.succeeded = true;
+        ctx.accounts.campaign_account.lp_temp_token_account = *ctx.accounts.pool_lp_token_account.to_account_info().key;
 
             
             
@@ -531,8 +537,7 @@ pub struct InitializeCampaign<'info> {
         seeds = [&mint.to_account_info().key.as_ref().to_owned()[0..9]],
         bump,
         payer = initializer,        
-        space = 44+ 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8+ 44 + 44 + 44 + 8 + 8 + 44,
-        // space= 160
+        space = 44+ 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8+ 44 + 44 + 44 + 8 + 8 + 44 + 44 + 8,
         
 
     )]
@@ -584,9 +589,13 @@ pub struct CampaignAccount {
 
     listing_price: u64,
 
+    unlock_date: u64,
+
     temp_token_account: Pubkey,
 
     pc_temp_token_account: Pubkey,
+
+    lp_temp_token_account: Pubkey,
 
 
     initialized: bool,
