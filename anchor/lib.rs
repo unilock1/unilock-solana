@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Mint, SetAuthority, TokenAccount, Transfer};
 use spl_token::instruction::AuthorityType;
 declare_id!("...");
+use solana_safe_math::{SafeMath};
 
 use serum_dex::instruction::initialize_market;
 use amm_anchor;
@@ -54,10 +55,17 @@ pub mod unilock {
         let coin_decimals =  ctx.accounts.mint.decimals;
    
 
-        let token_to_ray = (((hard_cap * raydium_percentage  ) / 1000) / u64::pow(10, 9) )  * listing_price  ;
-        let to_transfer_tokens =(presale_buy_rate*(hard_cap / u64::pow(10, 9))) + token_to_ray;
+        let token_to_ray  = ((((hard_cap as u128  * raydium_percentage as u128 * listing_price as u128  ) / 1000) / u64::pow(10, 9) as u128 )  ) as u128 ;
 
-        if ( ctx.accounts.initializer_deposit_token_account.amount <  to_transfer_tokens ){
+        let to_transfer_tokens =((presale_buy_rate as u128 *hard_cap as u128 / u64::pow(10, 9) as u128) as u128 + token_to_ray) as u128;
+ 
+
+        if ( token_to_ray ==0 || to_transfer_tokens ==0){ 
+            return Err(error!(ErrorCode::NullTokenAmount));
+
+        }
+
+        if ( (ctx.accounts.initializer_deposit_token_account.amount  )<  to_transfer_tokens as u64 ){
 
             return Err(error!(ErrorCode::InvalidTokenAmount));
 
@@ -80,7 +88,7 @@ pub mod unilock {
     
         token::transfer(
                 ctx.accounts.into_transfer_to_temp_token_context(),
-                to_transfer_tokens,
+                to_transfer_tokens as u64,
         )?;
         Ok(())
     }
@@ -1189,7 +1197,9 @@ pub enum ErrorCode {
     #[msg("Config Already initialized")]
     CongfigInitialized,
     #[msg("Invalid Token Amount")]
-    InvalidTokenAmount
+    InvalidTokenAmount,
+    #[msg("Null Token Amount")]
+    NullTokenAmount
 
 
 
