@@ -1,8 +1,8 @@
 use anchor_lang::prelude::*;
+pub use ethnum::prelude::*;
 use anchor_spl::token::{self, CloseAccount, Mint, SetAuthority, TokenAccount, Transfer};
 use spl_token::instruction::AuthorityType;
 declare_id!("...");
-use solana_safe_math::{SafeMath};
 
 use serum_dex::instruction::initialize_market;
 use amm_anchor;
@@ -29,6 +29,7 @@ pub mod unilock {
         end_date_timestamp: i64,
         unlock_date: u64
     ) -> Result<()> {
+        
   
         let campaign_account = &mut ctx.accounts.campaign_account;
         campaign_account.token_address = *ctx.accounts.mint.to_account_info().key;
@@ -49,15 +50,17 @@ pub mod unilock {
         campaign_account.listing_price = listing_price;
         campaign_account.succeeded = false;
         campaign_account.unlock_date = unlock_date;
+        campaign_account.distribute_WSOL_address = *ctx.accounts.distribute_WSOL_address.to_account_info().key;
        
 
 
         let coin_decimals =  ctx.accounts.mint.decimals;
+        // U256::new()
    
 
-        let token_to_ray  = ((((hard_cap as u128  * raydium_percentage as u128 * listing_price as u128  ) / 1000) / u64::pow(10, 9) as u128 )  ) as u128 ;
+        let token_to_ray  = ((((U256::new(hard_cap as u128)  * U256::new(raydium_percentage as u128) * U256::new(listing_price as u128)  ) / 1000) / U256::new(u64::pow(10, 9) as u128) )  )  ;
 
-        let to_transfer_tokens =((presale_buy_rate as u128 *hard_cap as u128 / u64::pow(10, 9) as u128) as u128 + token_to_ray) as u128;
+        let to_transfer_tokens =( U256::new(presale_buy_rate as u128) * U256::new(hard_cap as u128) / U256::new(u64::pow(10, 9) as u128)) + token_to_ray;
  
 
         if ( token_to_ray ==0 || to_transfer_tokens ==0){ 
@@ -65,7 +68,7 @@ pub mod unilock {
 
         }
 
-        if ( (ctx.accounts.initializer_deposit_token_account.amount  )<  to_transfer_tokens as u64 ){
+        if ( (ctx.accounts.initializer_deposit_token_account.amount  )<  to_transfer_tokens.as_u64() ){
 
             return Err(error!(ErrorCode::InvalidTokenAmount));
 
@@ -88,7 +91,7 @@ pub mod unilock {
     
         token::transfer(
                 ctx.accounts.into_transfer_to_temp_token_context(),
-                to_transfer_tokens as u64,
+                to_transfer_tokens.as_u64(),
         )?;
         Ok(())
     }
@@ -185,7 +188,7 @@ pub mod unilock {
             ctx.accounts
                 .into_transfer_to_taker_context()
                 .with_signer(&[&authority_seeds[..]]),
-            ctx.accounts.buyer_account.contributed_lamports * ctx.accounts.campaign_account.presale_buy_rate / u64::pow(10, 9),
+            (ctx.accounts.buyer_account.contributed_lamports as u128 * ctx.accounts.campaign_account.presale_buy_rate as u128 / u64::pow(10, 9) as u128) as u64,
         )?;
 
         
@@ -294,6 +297,8 @@ pub mod unilock {
          
             Ok(())
         }
+    #[inline(never)]
+
     pub fn addliquidity(ctx: Context<AddLiquidity>,campaign_bump: u8,    config_bump:u8
 ,        nonce: u8,open_time:u64,
             
@@ -302,15 +307,15 @@ pub mod unilock {
           let clock = Clock::get()?;
 
         if is_live(
-            ctx.accounts.campaign_account.clone(),
+            *ctx.accounts.campaign_account.clone(),
             clock.unix_timestamp,
         ) || is_failed(
-            ctx.accounts.campaign_account.clone(),
+            *ctx.accounts.campaign_account.clone(),
             clock.unix_timestamp,
         ) {
 
             msg!("Current timestamp {}",clock.unix_timestamp);
-            msg!("Campaign is not live");
+            msg!("Campaign didn't succeed");
             return Err(error!(ErrorCode::CantWithdrawFunds));
         }
         if ctx.accounts.campaign_account.succeeded == true {
@@ -351,20 +356,20 @@ pub mod unilock {
                 open_time
 
         ).unwrap();
+        ctx.accounts.campaign_account.amm_id = *ctx.accounts.amm_id.to_account_info().key;
         let (campaign_authority, _campaign_authority_bump) =
         Pubkey::find_program_address(&[CAMPAIGN_PDA_SEED], ctx.program_id);
         let authority_seeds = &[&CAMPAIGN_PDA_SEED[..], &[_campaign_authority_bump]];
-        let coin_decimals =  ctx.accounts.coin_mint_address.decimals  ;
         
-        let  to_distribute_amount= ctx.accounts.campaign_account.total_lamports_collected * ctx.accounts.configAccount.fee / 1000 ;
-        let to_fees_amount = ctx.accounts.campaign_account.total_lamports_collected  - to_distribute_amount ;
+        let  to_distribute_amount= ctx.accounts.campaign_account.total_lamports_collected as u128 * ctx.accounts.configAccount.fee as u128 / 1000 ;
 
-        let sol_to_ray = (ctx.accounts.campaign_account.raydium_percentage as u64 * to_distribute_amount ) / 1000;
-        let token_to_ray =  (sol_to_ray * ctx.accounts.campaign_account.listing_price as u64) *  u64::pow(10, coin_decimals as u32) /  u64::pow(10, 9) ;
-        
-        let cpi_sol_fees_accounts = Transfer {
+        let sol_to_ray = (ctx.accounts.campaign_account.raydium_percentage as  u128 * to_distribute_amount as u128 ) / 1000;
+        let token_to_ray =  (sol_to_ray as u128 * ctx.accounts.campaign_account.listing_price as u128) as u128 /  u64::pow(10, 9) as u128 ;
+        let sol_to_owner = to_distribute_amount - sol_to_ray;
+      
+        let cpi_sol_owner_accounts = Transfer {
             from: ctx.accounts.pc_temp_token_account.to_account_info().clone(),
-            to: ctx.accounts.to_address.to_account_info().clone(),
+            to: ctx.accounts.distribute_WSOL_address.to_account_info().clone(),
             authority: ctx.accounts.campaign_authority.clone(),
 
 
@@ -382,19 +387,20 @@ pub mod unilock {
             to: ctx.accounts.pool_coin_token_account.to_account_info().clone(),
             authority: ctx.accounts.campaign_authority.clone(),
         };
-        let cpi_program_sol = ctx.accounts.token_program.clone();
-        let cpi_program_sol_fees = ctx.accounts.token_program.clone();
 
+
+        let cpi_program_sol = ctx.accounts.token_program.clone();
+        let cpi_program_owner_sol = ctx.accounts.token_program.clone();
         let cpi_program_coin = ctx.accounts.token_program.clone();
 
         let cpi_sol_ctx = CpiContext::new(cpi_program_sol, cpi_sol_accounts);
-        let cpi_sol_fees_ctx = CpiContext::new(cpi_program_sol_fees, cpi_sol_fees_accounts);
-
+        let cpi_sol_owner_ctx = CpiContext::new(cpi_program_owner_sol, cpi_sol_owner_accounts);
         let cpi_coin_ctx = CpiContext::new(cpi_program_coin, cpi_coin_accounts);
 
-        token::transfer(cpi_sol_fees_ctx.with_signer(&[authority_seeds]),to_fees_amount )?;
-        token::transfer(cpi_sol_ctx.with_signer(&[authority_seeds]),sol_to_ray )?;
-        token::transfer(cpi_coin_ctx.with_signer(&[authority_seeds]),token_to_ray )?;
+        token::transfer(cpi_coin_ctx.with_signer(&[authority_seeds]),token_to_ray as u64 )?;
+        token::transfer(cpi_sol_ctx.with_signer(&[authority_seeds]),sol_to_ray as u64 )?;
+        token::transfer(cpi_sol_owner_ctx.with_signer(&[authority_seeds]),sol_to_owner as u64 )?;
+        
 
              
         anchor_lang::solana_program::program::invoke_signed(
@@ -458,17 +464,16 @@ pub mod unilock {
   }
   pub fn edit_config_account(ctx: Context<EditConfigAccount>, bump: u8,fee : u64
   ) -> Result<()> {
+    let config_account = &mut ctx.accounts.config_account;
 
-      if ctx.accounts.config_account.initialized {
-          return Err(error!(ErrorCode::CongfigInitialized));
 
-      }
-      ctx.accounts.config_account.initialized = true;
-      ctx.accounts.config_account.to_address = *ctx.accounts.to_address.key;
-      ctx.accounts.config_account.fee = fee;
-      ctx.accounts.config_account.owner =  *ctx.accounts.owner.key;
-      ctx.accounts.config_account.serum_program = ctx.accounts.serum_dex.key();
-      ctx.accounts.config_account.raydium_program = ctx.accounts.raydium_dex.key();
+      
+      config_account.initialized = true;
+      config_account.to_address = ctx.accounts.to_address.key();
+      config_account.fee = fee;
+      config_account.owner =  *ctx.accounts.owner.key;
+      config_account.serum_program = *ctx.accounts.serum_dex.to_account_info().key;
+      config_account.raydium_program = *ctx.accounts.raydium_dex.to_account_info().key;
 
   
 
@@ -478,7 +483,79 @@ pub mod unilock {
 
   
   Ok(())
-}
+   }
+  
+  pub fn withdraw_fees(ctx: Context<WithdrawFees>,campaign_bump:u8,config_bump:u8)  -> Result<()>{
+
+
+    if(ctx.accounts.campaign_account.succeeded == false){
+        return Err(error!(ErrorCode::LiqudityNotAdded));
+    }
+
+    let (campaign_authority, _campaign_authority_bump) =
+    Pubkey::find_program_address(&[CAMPAIGN_PDA_SEED], ctx.program_id);
+    let authority_seeds = &[&CAMPAIGN_PDA_SEED[..], &[_campaign_authority_bump]];
+
+
+    
+    let  campaign_amount = ctx.accounts.campaign_account.total_lamports_collected as u128 * ctx.accounts.config_account.fee as u128 / 1000 ;
+    let fees_amount = ctx.accounts.campaign_account.total_lamports_collected as u128 - campaign_amount;
+
+    let cpi_fee_accounts = Transfer {
+        from: ctx.accounts.pc_temp_token_account.to_account_info().clone(),
+        to: ctx.accounts.to_address.to_account_info().clone(),
+        authority: ctx.accounts.campaign_authority.clone(),
+    };
+
+
+    let cpi_program_sol = ctx.accounts.token_program.clone();
+ 
+    let cpi_sol_ctx = CpiContext::new(cpi_program_sol, cpi_fee_accounts);
+    token::transfer(cpi_sol_ctx.with_signer(&[authority_seeds]),fees_amount as u64 )?;
+
+
+    
+      Ok(())
+  }
+  pub fn withdraw_lpt(ctx: Context<WithdrawLPT>,campaign_bump:u8)  -> Result<()>{
+
+
+    if(ctx.accounts.campaign_account.succeeded == false){
+        return Err(error!(ErrorCode::LiqudityNotAdded));
+    }
+    let clock = Clock::get()?;
+
+    if  clock.unix_timestamp < ctx.accounts.campaign_account.unlock_date as i64 {
+
+        return Err(error!(ErrorCode::LiqudityNotUnlocked));
+
+    }
+
+    let (campaign_authority, _campaign_authority_bump) =
+    Pubkey::find_program_address(&[CAMPAIGN_PDA_SEED], ctx.program_id);
+    let authority_seeds = &[&CAMPAIGN_PDA_SEED[..], &[_campaign_authority_bump]];
+
+
+    
+    let  lpt_amount = ctx.accounts.lp_temp_token_account.amount ;
+
+    let cpi_lpt_accounts = Transfer {
+        from: ctx.accounts.lp_temp_token_account.to_account_info().clone(),
+        to: ctx.accounts.owner_lp_token_account.to_account_info().clone(),
+        authority: ctx.accounts.campaign_authority.clone(),
+    };
+
+
+    let cpi_program_lpt = ctx.accounts.token_program.clone();
+ 
+    let cpi_sol_ctx = CpiContext::new(cpi_program_lpt, cpi_lpt_accounts);
+    token::transfer(cpi_sol_ctx.with_signer(&[authority_seeds]),lpt_amount)?;
+
+
+    
+      Ok(())
+  }
+   
 
    
 }
@@ -518,9 +595,9 @@ pub struct InitializeCampaign<'info> {
     pub initializer: Signer<'info>,
 
     pub mint: Box<Account<'info, Mint>>,
-    // #[account(
-    //     address = Pubkey::new_from_array([6, 155, 136, 87, 254, 171, 129, 132, 251, 104, 127, 99, 70, 24, 192, 53, 218, 196, 57, 220, 26, 235, 59, 85, 152, 160, 240, 0, 0, 0, 0, 1]),
-    // )]
+    #[account(
+        address = Pubkey::new_from_array([6, 155, 136, 87, 254, 171, 129, 132, 251, 104, 127, 99, 70, 24, 192, 53, 218, 196, 57, 220, 26, 235, 59, 85, 152, 160, 240, 0, 0, 0, 0, 1]),
+    )]
     pub pc_mint: Box<Account<'info, Mint>>,
 
     #[account(
@@ -538,6 +615,11 @@ pub struct InitializeCampaign<'info> {
         token::authority = initializer,
     )]
     pub pc_temp_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(
+        token::mint = Pubkey::new_from_array([6, 155, 136, 87, 254, 171, 129, 132, 251, 104, 127, 99, 70, 24, 192, 53, 218, 196, 57, 220, 26, 235, 59, 85, 152, 160, 240, 0, 0, 0, 0, 1])
+    )]
+    pub distribute_WSOL_address: Box<Account<'info, TokenAccount>>,
+
 
     #[account(
         init,
@@ -545,7 +627,7 @@ pub struct InitializeCampaign<'info> {
         seeds = [&mint.to_account_info().key.as_ref().to_owned()[0..9]],
         bump,
         payer = initializer,        
-        space = 44+ 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8+ 44 + 44 + 44 + 8 + 8 + 44 + 44 + 8,
+        space = 44+ 1 + 1 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8+ 44 + 44 + 44 + 8 + 8 + 44 + 44 + 8 + 44+44,
         
 
     )]
@@ -605,6 +687,11 @@ pub struct CampaignAccount {
 
     lp_temp_token_account: Pubkey,
 
+    amm_id : Pubkey,
+
+    distribute_WSOL_address: Pubkey,
+
+
 
     initialized: bool,
 
@@ -613,6 +700,105 @@ pub struct CampaignAccount {
     owner: Pubkey,
     
     
+}
+
+
+#[derive(Accounts)]
+#[instruction(
+    campaign_bump:u8,
+    config_bump:u8
+)]
+pub struct WithdrawFees<'info>{
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    #[account(
+        mut,
+        has_one = owner,
+
+    )]
+    pub to_address: Account<'info,TokenAccount>,
+    pub mint : Account<'info,Mint>,
+
+    #[account(
+        mut,
+        seeds = [&mint.to_account_info().key.as_ref().to_owned()[0..9]],
+        bump = campaign_bump,
+        constraint = campaign_account.token_address == *mint.to_account_info().key
+ 
+ 
+     )]
+     pub campaign_account: Account<'info,CampaignAccount>,
+
+     #[account
+     (
+     
+         seeds = [CONFIG_PDA_SEED],
+         bump = config_bump,
+         has_one = to_address
+ 
+ 
+     
+     )]
+ 
+     pub config_account: Box<Account<'info,ConfigAccount>>,
+
+     pub campaign_authority: AccountInfo<'info>,
+     #[account(mut)]
+     pub pc_temp_token_account: Box<Account<'info, TokenAccount>>,
+
+     pub token_program: AccountInfo<'info>,
+
+
+    
+
+
+
+}
+
+#[derive(Accounts)]
+#[instruction(
+    campaign_bump:u8,
+)]
+pub struct WithdrawLPT<'info>{
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    pub mint: Box<Account<'info, Mint>>,
+    #[account(mut,
+    
+        has_one = owner
+
+    )]
+
+    
+    pub owner_lp_token_account: Box<Account<'info, TokenAccount>>,
+
+    #[account(mut)]
+
+
+    pub lp_temp_token_account : Box<Account<'info, TokenAccount>>,
+
+
+
+    #[account(
+        mut,
+        seeds = [&mint.to_account_info().key.as_ref().to_owned()[0..9]],
+        bump = campaign_bump,
+        constraint = campaign_account.token_address == *mint.to_account_info().key,
+        has_one = owner,
+        has_one = lp_temp_token_account,
+ 
+ 
+     )]
+     pub campaign_account: Account<'info,CampaignAccount>,
+
+     pub campaign_authority : AccountInfo<'info>,
+
+     pub token_program: AccountInfo<'info>,
+
+
 }
 
 #[derive(Accounts)]
@@ -650,7 +836,7 @@ pub struct BuyToken<'info>{
     
 
     pub buyer_account: Box<Account<'info,BuyerAccount>>,
-    #[account(mut,signer)]
+    #[account(mut)]
 
     pub temp_wsol : Box<Account<'info,TokenAccount>>,
 
@@ -699,6 +885,7 @@ pub struct WithdrawFunds<'info>{
     )]
     pub pc_temp_token_account: Box<Account<'info,TokenAccount>>,
     #[account(
+        mut,
         has_one = owner
     )]
 
@@ -765,8 +952,8 @@ pub struct InitializeMarket<'info> {
     pub serum_program: AccountInfo<'info>,
 
 
-    #[account(mut
-        ,signer
+    #[account(mut,
+        signer
     )]
     pub market: AccountInfo<'info>,
 
@@ -778,11 +965,13 @@ pub struct InitializeMarket<'info> {
     )]
     pub eventQueue: AccountInfo<'info>,
 
-    #[account(mut
+    #[account(mut,
+        signer
     )]
     pub bids: AccountInfo<'info>,
 
-    #[account(mut
+    #[account(mut,
+        signer
     )]
     pub asks: AccountInfo<'info>,
 
@@ -860,10 +1049,10 @@ pub struct AddLiquidity<'info> {
     )]
     pub lp_mint_address : Box<Account<'info, Mint>>,
 
-    #[account(mut)]
+    // #[account(mut)]
     pub coin_mint_address: Box<Account<'info, Mint>>,
 
-    #[account(mut,
+    #[account(
     
         constraint= pc_mint_address.key() ==Pubkey::new_from_array([6, 155, 136, 87, 254, 171, 129, 132, 251, 104, 127, 99, 70, 24, 192, 53, 218, 196, 57, 220, 26, 235, 59, 85, 152, 160, 240, 0, 0, 0, 0, 1]),
 
@@ -871,16 +1060,10 @@ pub struct AddLiquidity<'info> {
     pub pc_mint_address: Box<Account<'info, Mint>>,
 
 
-    #[account(mut,
-
-
-    )]
+    #[account(mut)]
     pub pool_coin_token_account: Box<Account<'info, TokenAccount>>,
 
-    #[account(mut,
-
-
-    )]
+    #[account(mut )]
     pub pool_pc_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
@@ -890,7 +1073,6 @@ pub struct AddLiquidity<'info> {
     pub pool_target_orders_account : AccountInfo<'info>,
 
     #[account(
-        signer,
         init,
         payer = user_wallet,
         token::mint = lp_mint_address,
@@ -900,26 +1082,28 @@ pub struct AddLiquidity<'info> {
 
 
     #[account(mut,
-    
     )]
     pub pool_temp_lp_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut,
         constraint= campaign_account.token_address == coin_mint_address.key(),
         has_one = temp_token_account,
         has_one = pc_temp_token_account,
+        has_one = distribute_WSOL_address,
         
         seeds = [&coin_mint_address.to_account_info().key.as_ref().to_owned()[0..9]],
         bump = campaign_bump,
         constraint = campaign_account.token_address == *coin_mint_address.to_account_info().key
         
     )]
-    pub campaign_account: Account<'info, CampaignAccount>,
+    pub campaign_account: Box<Account<'info, CampaignAccount>>,
 
     #[account(mut)]
+    pub distribute_WSOL_address: Box<Account<'info, TokenAccount>>,
+
     pub serum_market : AccountInfo<'info>,
-    #[account(mut)]
 
     pub campaign_authority: AccountInfo<'info>,
+
     #[account(mut)]
     pub temp_token_account: Box<Account<'info, TokenAccount>>,
     #[account(mut)]
@@ -933,11 +1117,13 @@ pub struct AddLiquidity<'info> {
         constraint = configAccount.raydium_program == programId.key(),
         seeds = [CONFIG_PDA_SEED],
         bump = config_bump,
-        has_one = to_address
+        // has_one = to_address
    
     )]
     pub configAccount : Box<Account<'info, ConfigAccount>>,
-    pub to_address:  AccountInfo<'info>,
+
+    // #[account(mut)]
+    // pub to_address:  Box<Account<'info,TokenAccount>>,
 
     pub system_program: Program<'info, System>,
 
@@ -975,7 +1161,7 @@ pub struct InitConfigAccount<'info> {
     (
         init,
         payer = owner,
-        space = 44 + 8 + 44 +2,
+        space = 44 + 44 + 44+ 8 + 44 +2,
         seeds = [CONFIG_PDA_SEED],
         bump
 
@@ -1011,7 +1197,7 @@ pub struct EditConfigAccount<'info> {
 
     #[account
     (
-
+        mut,
         seeds = [CONFIG_PDA_SEED],
         bump,
         has_one = owner
@@ -1116,6 +1302,8 @@ pub struct WithdrawTokens<'info>{
 }
 
 
+
+
 impl<'info> InitializeCampaign<'info> {
     fn into_transfer_to_temp_token_context(&self) -> CpiContext<'_, '_, '_, 'info, Transfer<'info>> {
         let cpi_accounts = Transfer {
@@ -1199,7 +1387,11 @@ pub enum ErrorCode {
     #[msg("Invalid Token Amount")]
     InvalidTokenAmount,
     #[msg("Null Token Amount")]
-    NullTokenAmount
+    NullTokenAmount,
+    #[msg("Liqudiity not yet added")]
+    LiqudityNotAdded,
+    #[msg("Liqudiity not yet unlocked")]
+    LiqudityNotUnlocked
 
 
 
